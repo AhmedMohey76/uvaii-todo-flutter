@@ -13,6 +13,15 @@ class Task {
 
   Task({required this.id, required this.title, required this.completed});
 
+  Task copyWith({String? title, bool? completed}) {
+    return Task(
+      id: id,
+      title: title ?? this.title,
+      completed: completed ?? this.completed,
+      // NOTE: Ensure your Task model matches the backend structure (id is required here)
+    );
+  }
+
   factory Task.fromJson(Map<String, dynamic> json) {
     return Task(
       id: json['id'] as int,
@@ -44,13 +53,30 @@ class _TaskListScreenState extends State<TaskListScreen> {
     _fetchTasks();
   }
 
+  // --- Utility Functions ---
+
+  void _showSnackBar(String message, Color color) {
+    // Check if the widget is still mounted before showing SnackBar
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: color,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
   Future<Map<String, String>> _getAuthHeaders() async {
     final token = await AuthManager.getToken();
+    // If the token is null or empty, this will result in a 401 on the server
     return {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer $token',
     };
   }
+
+  // --- CRUD Operations ---
 
   Future<void> _fetchTasks() async {
     setState(() {
@@ -65,17 +91,27 @@ class _TaskListScreenState extends State<TaskListScreen> {
       );
 
       if (response.statusCode == 200) {
+        // The backend returns an array of tasks
         final List jsonList = jsonDecode(response.body);
         setState(() {
           _tasks = jsonList.map((json) => Task.fromJson(json)).toList();
         });
       } else if (response.statusCode == 401) {
-        widget.onLogout(); // Token expired or invalid
+        // Token expired or invalid, log out
+        widget.onLogout();
       } else {
-        // Handle other errors (optional, usually just logs to console)
+        _showSnackBar(
+          'Failed to load tasks. Status: ${response.statusCode}. Body: ${response.body}',
+          Colors.orange,
+        );
       }
     } catch (e) {
-      // Handle network error (optional, usually just logs to console)
+      // Catch specific network errors like SocketException (no connection)
+      _showSnackBar(
+        'Network error. Please check the server address ($apiUrl) and connection.',
+        Colors.red,
+      );
+      print('Network Error: $e');
     }
 
     setState(() {
@@ -97,33 +133,72 @@ class _TaskListScreenState extends State<TaskListScreen> {
       );
 
       if (response.statusCode == 201) {
-        _fetchTasks();
+        _showSnackBar('Task added successfully!', Colors.green);
+        _fetchTasks(); // Refresh the list
       } else if (response.statusCode == 401) {
         widget.onLogout();
+      } else {
+        _showSnackBar(
+          'Failed to add task. Status: ${response.statusCode}. Body: ${response.body}',
+          Colors.red,
+        );
       }
     } catch (e) {
-      // Handle network error
+      _showSnackBar('Network error. Could not add task.', Colors.red);
+      print('Network Error: $e');
     }
   }
 
-  Future<void> _toggleTaskStatus(Task task) async {
-    final newStatus = !task.completed;
+  // Generalized update function for both status and title
+  Future<void> _updateTask({
+    required Task task,
+    bool? newCompletedStatus,
+    String? newTitle,
+  }) async {
+    final updatedTask = task.copyWith(
+      completed: newCompletedStatus ?? task.completed,
+      title: newTitle ?? task.title,
+    );
+
+    // Prepare the body with only the fields that are actually changing
+    final Map<String, dynamic> updateBody = {
+      // Send both title and completed status in the PUT request
+      'completed': updatedTask.completed, 
+      'title': updatedTask.title, 
+    };
 
     try {
       final headers = await _getAuthHeaders();
       final response = await http.put(
         Uri.parse('$apiUrl/tasks/${task.id}'),
         headers: headers,
-        body: jsonEncode({'completed': newStatus}),
+        body: jsonEncode(updateBody),
       );
 
       if (response.statusCode == 200) {
-        _fetchTasks();
+        // Optimistic UI update: immediately update the list
+        setState(() {
+          final index = _tasks.indexWhere((t) => t.id == task.id);
+          if (index != -1) {
+            _tasks[index] = updatedTask;
+          }
+        });
+        if (newTitle != null) {
+          _showSnackBar('Task updated successfully!', Colors.green);
+        }
       } else if (response.statusCode == 401) {
         widget.onLogout();
+      } else {
+        _showSnackBar(
+          'Failed to update task. Status: ${response.statusCode}. Body: ${response.body}',
+          Colors.red,
+        );
+        _fetchTasks(); // Re-fetch on failure to sync state
       }
     } catch (e) {
-      // Handle network error
+      _showSnackBar('Network error. Could not update task.', Colors.red);
+      _fetchTasks(); // Re-fetch on network error
+      print('Network Error: $e');
     }
   }
 
@@ -136,23 +211,88 @@ class _TaskListScreenState extends State<TaskListScreen> {
       );
 
       if (response.statusCode == 200) {
-        _fetchTasks();
+        // Optimistic UI update: remove from list immediately
+        setState(() {
+          _tasks.removeWhere((t) => t.id == id);
+        });
+        _showSnackBar('Task deleted successfully!', Colors.grey);
       } else if (response.statusCode == 401) {
         widget.onLogout();
+      } else {
+        _showSnackBar(
+          'Failed to delete task. Status: ${response.statusCode}. Body: ${response.body}',
+          Colors.red,
+        );
       }
     } catch (e) {
-      // Handle network error
+      _showSnackBar('Network error. Could not delete task.', Colors.red);
+      print('Network Error: $e');
     }
   }
+
+  // --- Edit Dialog ---
+
+  Future<void> _showEditDialog(Task task) async {
+    final TextEditingController editController = TextEditingController(
+      text: task.title,
+    );
+
+    return showDialog<void>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Edit Task'),
+          content: TextField(
+            controller: editController,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'Task Title'),
+            onSubmitted: (value) {
+              if (value.isNotEmpty && value != task.title) {
+                _updateTask(task: task, newTitle: value);
+              }
+              Navigator.of(context).pop();
+            },
+          ),
+          actions: <Widget>[
+            TextButton(
+              child: const Text('Cancel'),
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+            ),
+            ElevatedButton(
+              child: const Text('Save'),
+              onPressed: () {
+                if (editController.text.isNotEmpty &&
+                    editController.text != task.title) {
+                  _updateTask(task: task, newTitle: editController.text);
+                }
+                Navigator.of(context).pop();
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // --- Widget Build ---
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('My To-Do List'),
+        title: const Text('My Secure To-Do List'),
+        backgroundColor: Colors.teal,
+        foregroundColor: Colors.white,
         actions: [
           IconButton(
-            icon: const Icon(Icons.exit_to_app),
+            icon: const Icon(Icons.refresh, color: Colors.white),
+            onPressed: _fetchTasks,
+            tooltip: 'Refresh List',
+          ),
+          IconButton(
+            icon: const Icon(Icons.exit_to_app, color: Colors.white),
             onPressed: widget.onLogout,
             tooltip: 'Logout',
           ),
@@ -161,17 +301,20 @@ class _TaskListScreenState extends State<TaskListScreen> {
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.all(8.0),
+            padding: const EdgeInsets.all(12.0),
             child: Row(
               children: [
                 Expanded(
                   child: TextField(
                     controller: _newTaskController,
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: 'New Task',
-                      border: OutlineInputBorder(
+                      hintText: 'Enter task title...',
+                      border: const OutlineInputBorder(
                         borderRadius: BorderRadius.all(Radius.circular(10)),
                       ),
+                      fillColor: Colors.grey.shade100,
+                      filled: true,
                     ),
                     onSubmitted: (_) => _addTask(),
                   ),
@@ -181,7 +324,7 @@ class _TaskListScreenState extends State<TaskListScreen> {
                   icon: const Icon(
                     Icons.add_circle,
                     color: Colors.teal,
-                    size: 40,
+                    size: 44,
                   ),
                   onPressed: _addTask,
                   tooltip: 'Add Task',
@@ -191,56 +334,71 @@ class _TaskListScreenState extends State<TaskListScreen> {
           ),
           Expanded(
             child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _tasks.isEmpty
-                ? Center(
-                    child: Text(
-                      "No tasks yet. Add one!",
-                      style: TextStyle(fontSize: 18, color: Colors.grey[600]),
-                    ),
+                ? const Center(
+                    child: CircularProgressIndicator(color: Colors.teal),
                   )
-                : ListView.builder(
-                    itemCount: _tasks.length,
-                    itemBuilder: (context, index) {
-                      final task = _tasks[index];
-                      return Card(
-                        margin: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
+                : _tasks.isEmpty
+                    ? Center(
+                        child: Text(
+                          "No tasks yet. Add one!",
+                          style: TextStyle(fontSize: 18, color: Colors.grey[600]),
                         ),
-                        elevation: 2,
-                        child: ListTile(
-                          leading: IconButton(
-                            icon: Icon(
-                              task.completed
-                                  ? Icons.check_circle
-                                  : Icons.radio_button_unchecked,
-                              color: task.completed
-                                  ? Colors.green
-                                  : Colors.grey,
+                      )
+                    : ListView.builder(
+                        itemCount: _tasks.length,
+                        itemBuilder: (context, index) {
+                          final task = _tasks[index];
+                          return Card(
+                            margin: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 4,
                             ),
-                            onPressed: () => _toggleTaskStatus(task),
-                          ),
-                          title: Text(
-                            task.title,
-                            style: TextStyle(
-                              decoration: task.completed
-                                  ? TextDecoration.lineThrough
-                                  : TextDecoration.none,
-                              color: task.completed
-                                  ? Colors.grey
-                                  : Colors.black,
+                            elevation: 3,
+                            child: ListTile(
+                              // Tapping the main body opens the edit dialog
+                              onTap: () => _showEditDialog(task),
+                              leading: IconButton(
+                                icon: Icon(
+                                  task.completed
+                                      ? Icons.check_circle_rounded
+                                      : Icons.radio_button_unchecked,
+                                  color: task.completed
+                                      ? Colors.green.shade600
+                                      : Colors.teal.shade300,
+                                  size: 28,
+                                ),
+                                onPressed: () => _updateTask(
+                                  task: task,
+                                  newCompletedStatus: !task.completed,
+                                ),
+                                tooltip: task.completed
+                                    ? 'Mark incomplete'
+                                    : 'Mark complete',
+                              ),
+                              title: Text(
+                                task.title,
+                                style: TextStyle(
+                                  decoration: task.completed
+                                      ? TextDecoration.lineThrough
+                                      : TextDecoration.none,
+                                  color: task.completed
+                                      ? Colors.grey.shade600
+                                      : Colors.black87,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              trailing: IconButton(
+                                icon: const Icon(
+                                  Icons.delete_forever,
+                                  color: Colors.redAccent,
+                                ),
+                                onPressed: () => _deleteTask(task.id),
+                                tooltip: 'Delete Task',
+                              ),
                             ),
-                          ),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.delete, color: Colors.red),
-                            onPressed: () => _deleteTask(task.id),
-                            tooltip: 'Delete Task',
-                          ),
-                        ),
-                      );
-                    },
-                  ),
+                          );
+                        },
+                      ),
           ),
         ],
       ),
