@@ -205,6 +205,28 @@ class _RegistrationFormState extends State<RegistrationForm> {
   String? _errorMessage;
   bool _isLoading = false;
 
+  // Function to validate password complexity
+  bool _isPasswordComplex(String password) {
+    // 1. Minimum length of 8 characters
+    if (password.length < 8) {
+      return false;
+    }
+    // 2. At least 1 letter (case-insensitive)
+    if (!password.contains(RegExp(r'[a-zA-Z]'))) {
+      return false;
+    }
+    // 3. At least 1 number
+    if (!password.contains(RegExp(r'[0-9]'))) {
+      return false;
+    }
+    // 4. At least 1 symbol (non-alphanumeric/non-space)
+    if (!password.contains(RegExp(r'[!@#$%^&*(),.?":{}|<>]'))) {
+      return false;
+    }
+
+    return true;
+  }
+
   Future<void> _register() async {
     setState(() {
       _isLoading = true;
@@ -214,6 +236,17 @@ class _RegistrationFormState extends State<RegistrationForm> {
     final username = _usernameController.text;
     final email = _emailController.text;
     final password = _passwordController.text;
+
+    // --- NEW PASSWORD VALIDATION ---
+    if (!_isPasswordComplex(password)) {
+      setState(() {
+        _errorMessage =
+            "Password must be at least 8 characters long and include:\n- 1 letter\n- 1 number\n- 1 symbol";
+        _isLoading = false;
+      });
+      return;
+    }
+    // -------------------------------
 
     try {
       final response = await http.post(
@@ -284,12 +317,14 @@ class _RegistrationFormState extends State<RegistrationForm> {
         const SizedBox(height: 16),
         TextField(
           controller: _passwordController,
-          decoration: const InputDecoration(
+          decoration: InputDecoration(
             labelText: 'Password',
-            border: OutlineInputBorder(
+            // Added helper text to inform the user of the requirements
+            helperText: 'Min 8 chars, includes 1 letter, 1 number, 1 symbol.',
+            border: const OutlineInputBorder(
               borderRadius: BorderRadius.all(Radius.circular(10)),
             ),
-            prefixIcon: Icon(Icons.lock),
+            prefixIcon: const Icon(Icons.lock),
           ),
           obscureText: true,
         ),
