@@ -1,0 +1,26 @@
+name: demo1
+description: A Secure To-Do List Application with MFA.
+publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0' # Ensure this matches your current Flutter SDK version
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Core packages for networking and secure storage
+  http: ^1.2.0
+  flutter_secure_storage: ^9.0.0 
+  qr_flutter: ^4.1.0 # NEW: For generating the QR code
+  shared_preferences: ^2.5.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+# The following section is specific to Flutter.
+flutter:
+  uses-material-design: true
